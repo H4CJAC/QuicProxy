@@ -10,9 +10,10 @@ import (
 	"net/http"
 	"bufio"
 	"io"
-	"GoQuicProxy/genCerts"
 	"GoQuicProxy/tlsServer"
 	"github.com/lucas-clemente/quic-go/h2quic"
+	"GoQuicProxy/utils"
+	"GoQuicProxy/quicAddrs"
 )
 
 
@@ -21,7 +22,7 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags|log.Lshortfile)
 	//加载根证书
-	err := genCerts.LoadRootCA()
+	err := utils.LoadRootCA()
 	if err != nil {
 		log.Panic(err)
 	}
@@ -69,13 +70,8 @@ func handleClientRequest(client net.Conn) {
 
 	//判断是否是https并支持quic
 	if method == "CONNECT" {
-		qPort, err := isQuicSupported("https://" + address)
-		if err != nil {
-			log.Println(err)
-			//return
-		}
-		//log.Printf("IsQuicSupported: %s %v\n", address, qPort != "")
-		if qPort != "" {
+		isSupport, qPort := quicAddrs.IsQuicSupported("https://" + address)
+		if isSupport {
 			tranRepost(client, address, qPort)
 		}else {
 			simpleRepost(client, address, method, req)
@@ -84,26 +80,6 @@ func handleClientRequest(client net.Conn) {
 		simpleRepost(client, address, method, req)
 	}
 
-}
-
-//是否支持quic
-func isQuicSupported(address string) (string, error) { //如何更快检测？？？？
-	if strings.Contains(address, "www.google.com") || strings.Contains(address, "www.youtube.com") || strings.Contains(address, "ytimg") {
-		return ":443", nil
-	}
-	res, err := http.DefaultClient.Head(address)
-	if err != nil {
-		return "", err
-	}
-	altsvc := res.Header.Get("Alt-Svc")
-	if altsvc == "" {
-		return "", nil
-	}
-	//如何处理得更到位？？？？要截取到quic=443？？？还是综合什么考虑？？？暂时还有越界问题
-	quicPort := altsvc[strings.IndexByte(altsvc, ':'):strings.IndexByte(altsvc, ';')-1]
-	//log.Printf("%s\n%#v\n", address, res)
-	res.Body.Close()
-	return quicPort, nil
 }
 
 //协议转换转发
@@ -126,20 +102,13 @@ func tranRepost(client net.Conn, address string, qPort string)  {
 	//读取tls请求
 	req, err := http.ReadRequest(br)
 	if err != nil {
-		/*if err == io.EOF && waits < constValue.WAIT_COUNT {
-			waits ++
-			log.Printf("Waiting: %s %d\n", conn.RemoteAddr().String(), waits)
-			time.Sleep(constValue.WAIT_TIME)
-			continue
-		}*/
 		log.Println(err, req == nil, address)
 		return
 	}
 	if req == nil {
 		return
 	}
-	//log.Printf("QuicRequest: %s\n", req.URL)
-	//发送quic请求并接收响应
+	//发送quic请求并转发响应
 	////发送请求
 	req.Host = req.Host + qPort
 	req.URL.Host = req.Host
@@ -150,14 +119,13 @@ func tranRepost(client net.Conn, address string, qPort string)  {
 	}
 	rt := &h2quic.RoundTripper{}
 	cli := &http.Client{Transport: rt}
-	//cli := quic_client.Quic_cli
 	cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
 	}
 	res, err := cli.Do(req)
 	if err != nil {
 		log.Println(err)
-		if !strings.Contains(err.Error(), constValue.REDIRECT_ERR.Error()) { //非跳转
+		if !isRedirectErr(err.Error()) { //非跳转
 			cli = &http.Client{}
 			cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 				return constValue.REDIRECT_ERR
@@ -165,63 +133,25 @@ func tranRepost(client net.Conn, address string, qPort string)  {
 			res, err = cli.Do(req)
 			if err != nil {
 				log.Println(err)
-				if !strings.Contains(err.Error(), constValue.REDIRECT_ERR.Error()) {
+				if !isRedirectErr(err.Error()) {
 					return
 				}
 			}
-			//return
 		}else {
 			res.ContentLength = 0
 		}
 	}
-
-	//log.Printf("QuicResponse: %s\n", res.StatusCode)
-	////接收响应
-	/*var b [constValue.BUFFER_SIZE]byte
-	buf := &bytes.Buffer{}
-	for {
-		n, err := res.Body.Read(b[:])
-		if n > 0 {
-			buf.Write(b[:n])
-		}
-		if err != nil {
-			if err != io.EOF {
-				log.Println(err)
-				return
-			}
-			break
-		}
-	}
-	*/
-	//发回tls响应
-	/*tls_res := http.Response{
-		Status: res.Status,
-		StatusCode: res.StatusCode,
-		ProtoMajor: res.ProtoMajor,
-		ProtoMinor: res.ProtoMinor,
-		Header: res.Header,
-		//ContentLength: res.ContentLength,
-		TransferEncoding: res.TransferEncoding,
-		Trailer: res.Trailer,
-		Request: res.Request,
-		Close: res.Close,
-		Uncompressed: res.Uncompressed,
-		Proto: res.Proto,
-		Body: struct {
-			io.Reader
-			io.Closer
-		}{
-			buf,
-			res.Body,
-		},
-	}*/
-	//log.Printf("%s\n%#v\n", req.URL, req)
-	//log.Printf("%#v\n", res)
+	////转发响应
 	err = res.Write(conn)
 	if err != nil {
 		log.Println(err, req.URL)
 		return
 	}
+}
+
+func isRedirectErr(err string) bool {
+	erridx := strings.LastIndexByte(err, ':') + 2
+	return erridx >= 2 && erridx < len(err) && err[erridx:] == constValue.REDIRECT_ERR.Error()
 }
 
 //单纯转发

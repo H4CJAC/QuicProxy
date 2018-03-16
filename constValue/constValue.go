@@ -1,16 +1,14 @@
 package constValue
 
 import (
-	"time"
 	"errors"
 )
 
 const (
-	BUFFER_SIZE = 32 * 1024
 	PROXY_PORT = 8081
-	WAIT_COUNT = 5
-	WAIT_TIME = 2 * time.Second
 	CERTOUTS_PATH = "./certs/outs/"
+	CERT_NODEID = 0
+	EXPIRE_TIME = 24 * 3600 //秒
 )
 
 var (
