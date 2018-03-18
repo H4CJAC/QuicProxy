@@ -6,11 +6,17 @@ import (
 	"time"
 	"log"
 	"GoQuicProxy/constValue"
+	"sync"
 )
 
 var (
-	quicSupportMap = make(map[string]*addrInfo)
+	quic_support_map = quicSupportMap{mp: make(map[string]*addrInfo), mtx: sync.RWMutex{}}
 )
+
+type quicSupportMap struct {
+	mp map[string]*addrInfo
+	mtx sync.RWMutex
+}
 
 type addrInfo struct {
 	quic_support bool
@@ -18,9 +24,23 @@ type addrInfo struct {
 	port string
 }
 
+func (m *quicSupportMap) get(addr string) (*addrInfo, bool) {
+	m.mtx.RLock()
+	defer m.mtx.RUnlock()
+	info, ok := m.mp[addr]
+	return info, ok
+}
+
+func (m *quicSupportMap) add(addr string, info *addrInfo) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	m.mp[addr] = info
+}
+
 //是否支持quic
 func IsQuicSupported(address string) (bool, string) {
-	addr_info, ok := quicSupportMap[address]
+	log.Println(len(quic_support_map.mp)) /////////////
+	addr_info, ok := quic_support_map.get(address)
 	now_time := time.Now().Unix()
 	//存在缓存中并未过期
 	if ok && (addr_info.expire_time >= now_time) {
@@ -32,31 +52,37 @@ func IsQuicSupported(address string) (bool, string) {
 
 func CheckAddr(address string, now_time int64) (bool, string) {
 	//存入缓存
-	quicSupportMap[address] = &addrInfo{expire_time: now_time + constValue.EXPIRE_TIME}
-	addr_info, _ := quicSupportMap[address]
+	addr_info := &addrInfo{expire_time: now_time + constValue.EXPIRE_TIME}
 	res, err := http.DefaultClient.Head(address)
 	if err != nil {
 		log.Println(err)
 		addr_info.quic_support = false
+		quic_support_map.add(address, addr_info)
 		return false, ""
 	}
+
+	defer res.Body.Close()
+
 	alt_svc := res.Header.Get("Alt-Svc")
 	if alt_svc == "" {
 		addr_info.quic_support = false
+		quic_support_map.add(address, addr_info)
 		return false, ""
 	}
 	s_off := strings.Index(alt_svc, "quic=\"") + 6
 	if s_off < 6 || s_off >= len(alt_svc) {
 		addr_info.quic_support = false
+		quic_support_map.add(address, addr_info)
 		return false, ""
 	}
 	e_off := strings.IndexByte(alt_svc[s_off:], '"') + s_off
 	if s_off > e_off || e_off > len(alt_svc) {
 		addr_info.quic_support = false
+		quic_support_map.add(address, addr_info)
 		return false, ""
 	}
 	addr_info.quic_support = true
 	addr_info.port = alt_svc[s_off:e_off]
-	res.Body.Close()
+	quic_support_map.add(address, addr_info)
 	return true, addr_info.port
 }

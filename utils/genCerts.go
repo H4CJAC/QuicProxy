@@ -13,18 +13,40 @@ import (
 	"os"
 	"net"
 	"GoQuicProxy/constValue"
+	"sync"
+	"log"
 )
 
 const(
 	rootCa = "./certs/ca/ca.cer"
 	rootKey = "./certs/ca/cakey.pem"
+	cert_map_max_len = 100
 )
+
+type certMap struct {
+	mp map[string]*tls.Certificate
+	mtx sync.RWMutex
+}
 
 var(
 	ca *x509.Certificate
 	key *rsa.PrivateKey
 	uidGenor = Generator{NodeID: constValue.CERT_NODEID}
+	cert_map = certMap{mp: make(map[string]*tls.Certificate), mtx: sync.RWMutex{}}
 )
+
+func (m *certMap) get(addr string) (*tls.Certificate, bool) {
+	m.mtx.RLock()
+	defer m.mtx.RUnlock()
+	cer, ok := m.mp[addr]
+	return cer, ok
+}
+
+func (m *certMap) add(addr string, certificate *tls.Certificate) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	m.mp[addr] = certificate
+}
 
 func LoadRootCA() error {
 	//读取根证书文件和私钥文件
@@ -51,6 +73,11 @@ func LoadRootCA() error {
 }
 
 func GenCert(addr string) (*tls.Certificate, error) {
+	log.Println(len(cert_map.mp))
+	cert, ok := cert_map.get(addr)
+	if ok {
+		return cert, nil
+	}
 	//检测是否已存在该证书
 	cerFile, keyFile := constValue.CERTOUTS_PATH + addr + "cer.pem", constValue.CERTOUTS_PATH + addr + "key.pem"
 	_, ec := os.Stat(cerFile)
@@ -64,7 +91,9 @@ func GenCert(addr string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &cer, nil
+	cert = &cer
+	cert_map.add(addr, cert)
+	return cert, nil
 }
 
 func createCer(addr string, cerFile string, keyFile string) error {
