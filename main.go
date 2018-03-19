@@ -130,7 +130,9 @@ func doARequest(br *bufio.Reader, conn net.Conn, address string, qPort string) e
 			res.ContentLength = 0
 		}
 	}
+
 	defer res.Body.Close()
+	
 	////转发响应
 	err = res.Write(conn)
 	if err != nil {
