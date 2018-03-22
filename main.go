@@ -92,7 +92,7 @@ func handleClientRequest(client net.Conn) {
 
 }
 
-func doARequest(br *bufio.Reader, conn net.Conn, address string, qPort string) error {
+func doARequest(br *bufio.Reader, conn net.Conn, qPort string) error {
 	//读取tls请求
 	conn.SetReadDeadline(time.Now().Add(constValue.TLS_READ_TIMEOUT))
 	req, err := http.ReadRequest(br)
@@ -132,17 +132,12 @@ func doARequest(br *bufio.Reader, conn net.Conn, address string, qPort string) e
 	}
 
 	defer res.Body.Close()
-	
+
 	////转发响应
 	err = res.Write(conn)
 	if err != nil {
 		return err
 	}
-	/*_, err = conn.Write([]byte{'\r','\n'})
-	if err != nil {
-		log.Println(err)
-		return err
-	}*/
 	if req.Close {
 		return constValue.HTTP_CLOSE_ERR
 	}
@@ -162,12 +157,10 @@ func tranRepost(client net.Conn, address string, qPort string) {
 		log.Println(err, address)
 		return
 	}
-
 	defer conn.Close()
-
 	br := bufio.NewReader(conn)
 	for {
-		err = doARequest(br, conn, address, qPort)
+		err = doARequest(br, conn, qPort)
 		if err != nil {
 			log.Println(err, address)
 			break
