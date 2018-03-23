@@ -12,7 +12,7 @@ func Dial(client net.Conn, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	config := &tls.Config{Certificates: []tls.Certificate{*cer}}
+	config := &tls.Config{Certificates: []tls.Certificate{*cer}, NextProtos: []string{"h2"}}
 	conn := tls.Server(client, config)
 	err = conn.Handshake()
 	if err != nil {

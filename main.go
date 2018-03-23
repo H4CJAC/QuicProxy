@@ -14,13 +14,14 @@ import (
 	"GoQuicProxy/utils"
 	"GoQuicProxy/quicAddrs"
 	"github.com/lucas-clemente/quic-go/h2quic"
-	"time"
+	"golang.org/x/net/http2"
 )
 
 var (
-	handle_err_cli = &http.Client{}
+	handle_err_cli = &http.Client{Transport: &http2.Transport{}}
 	quic_cli *http.Client
 	roundtrip *h2quic.RoundTripper
+	h2server = &http2.Server{}
 )
 
 
@@ -37,6 +38,12 @@ func main() {
 		log.Panic(err)
 	}
 	handle_err_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return constValue.REDIRECT_ERR
+	}
+	roundtrip = &h2quic.RoundTripper{}
+	//defer roundtrip.Close()
+	quic_cli = &http.Client{Transport: roundtrip}
+	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
 	}
 	log.Println("......started......")
@@ -92,56 +99,50 @@ func handleClientRequest(client net.Conn) {
 
 }
 
-func doARequest(br *bufio.Reader, conn net.Conn, qPort string) error {
-	//读取tls请求
-	conn.SetReadDeadline(time.Now().Add(constValue.TLS_READ_TIMEOUT))
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		return err
-	}
-	conn.SetReadDeadline(constValue.TIME_ZERO)
-	//发送quic请求并转发响应
-	////发送请求
-	req.Host = req.Host + qPort
+type http2Handler struct {
+	qPort string
+}
+
+func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	req.Host = req.Host + h.qPort
 	req.URL.Host = req.Host
 	req.URL.Scheme = "https"
 	req.RequestURI = ""
-	if req.Body == http.NoBody {
+	if req.ContentLength == 0 {
 		req.Body = nil
 	}
-	roundtrip = &h2quic.RoundTripper{}
-	defer roundtrip.Close()
-	quic_cli = &http.Client{Transport: roundtrip}
-	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return constValue.REDIRECT_ERR
-	}
-	res, err := quic_cli.Do(req)
+	resp, err := quic_cli.Do(req)
 	if err != nil {
 		log.Println(err)
 		if !isRedirectErr(err.Error()) { //非跳转
-			res, err = handle_err_cli.Do(req)
+			resp, err = handle_err_cli.Do(req)
 			if err != nil {
-				if !isRedirectErr(err.Error()) {
-					return err
-				}
 				log.Println(err)
+				if !isRedirectErr(err.Error()) {
+					log.Println(err)
+					resw.WriteHeader(404)
+					return
+				}
 			}
 		}else {
-			res.ContentLength = 0
+			resp.ContentLength = 0
 		}
 	}
+	defer resp.Body.Close()
 
-	defer res.Body.Close()
-
-	////转发响应
-	err = res.Write(conn)
-	if err != nil {
-		return err
+	for k, vs := range resp.Header {
+		for _, v := range vs {
+			resw.Header().Add(k, v)
+		}
 	}
-	if req.Close {
-		return constValue.HTTP_CLOSE_ERR
+	resw.WriteHeader(resp.StatusCode)
+	if resp.ContentLength != 0 {
+		n, err := io.Copy(resw, resp.Body)
+		if err != nil {
+			log.Println(err, n, req.URL)
+		}
 	}
-	return nil
 }
 
 //协议转换转发
@@ -157,16 +158,7 @@ func tranRepost(client net.Conn, address string, qPort string) {
 		log.Println(err, address)
 		return
 	}
-	defer conn.Close()
-	br := bufio.NewReader(conn)
-	for {
-		err = doARequest(br, conn, qPort)
-		if err != nil {
-			log.Println(err, address)
-			break
-		}
-	}
-
+	h2server.ServeConn(conn, &http2.ServeConnOpts{Handler: &http2Handler{qPort: qPort}})
 }
 
 func isRedirectErr(err string) bool {
