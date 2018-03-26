@@ -41,7 +41,7 @@ func main() {
 		return constValue.REDIRECT_ERR
 	}
 	roundtrip = &h2quic.RoundTripper{}
-	//defer roundtrip.Close()
+	defer roundtrip.Close()
 	quic_cli = &http.Client{Transport: roundtrip}
 	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
