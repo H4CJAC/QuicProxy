@@ -22,6 +22,7 @@ var (
 	quic_cli *http.Client
 	roundtrip *h2quic.RoundTripper
 	h2server = &http2.Server{}
+	overflow_bs = [32 * 1024]byte{}
 )
 
 
@@ -104,7 +105,6 @@ type http2Handler struct {
 }
 
 func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
-	defer req.Body.Close()
 	req.Host = req.Host + h.qPort
 	req.URL.Host = req.Host
 	req.URL.Scheme = "https"
@@ -112,6 +112,7 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	if req.ContentLength == 0 {
 		req.Body = nil
 	}
+
 	resp, err := quic_cli.Do(req)
 	if err != nil {
 		log.Println(err)
@@ -141,6 +142,19 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 		n, err := io.Copy(resw, resp.Body)
 		if err != nil {
 			log.Println(err, n, req.URL)
+			dealOverflow(resp.Body, overflow_bs[:])
+		}
+	}
+}
+
+func dealOverflow(src io.Reader, buf []byte) {
+	for {
+		_, er := src.Read(buf)
+		if er != nil {
+			if er != io.EOF {
+				log.Println(er)
+			}
+			break
 		}
 	}
 }
@@ -194,5 +208,4 @@ func simpleRepost(client net.Conn, address string, method string, req *http.Requ
 	}()
 	<- ExitChan
 	<- ExitChan
-	log.Println("out")
 }
