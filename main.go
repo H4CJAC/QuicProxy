@@ -15,12 +15,14 @@ import (
 	"GoQuicProxy/quicAddrs"
 	"github.com/lucas-clemente/quic-go/h2quic"
 	"golang.org/x/net/http2"
+	"time"
+	"sync"
 )
 
 var (
-	handle_err_cli = &http.Client{Transport: &http2.Transport{}}
-	quic_cli *http.Client
+	//quic_cli *http.Client
 	roundtrip *h2quic.RoundTripper
+	rt_mtx = &sync.RWMutex{}
 	h2server = &http2.Server{}
 	overflow_bs = [32 * 1024]byte{}
 )
@@ -38,15 +40,15 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
-	handle_err_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+	constValue.H2_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
 	}
 	roundtrip = &h2quic.RoundTripper{}
 	defer roundtrip.Close()
-	quic_cli = &http.Client{Transport: roundtrip}
+	/*quic_cli = &http.Client{Transport: roundtrip}
 	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
-	}
+	}*/
 	log.Println("......started......")
 
 	for {
@@ -104,23 +106,65 @@ type http2Handler struct {
 	qPort string
 }
 
+
 func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	req.Host = req.Host + h.qPort
 	req.URL.Host = req.Host
 	req.URL.Scheme = "https"
 	req.RequestURI = ""
-	if req.ContentLength == 0 {
-		req.Body = nil
+	if req.Body != nil {
+		defer req.Body.Close()
 	}
 
-	resp, err := quic_cli.Do(req)
+	var resp *http.Response
+	var err error
+	if req.ContentLength == 0 { //0 content request has a timeout
+
+		req.Body = nil //0 content request's body has to be nil
+
+		comp_chan := make(chan bool)
+		go func() {
+			rt_mtx.RLock()
+			resp, err = roundtrip.RoundTrip(req)
+			defer close(comp_chan)
+			comp_chan <- true
+		}()
+		select {
+		case <- comp_chan:
+			rt_mtx.RUnlock()
+		case <- time.After(constValue.QUIC_DO_TIMEOUT):
+			rt_mtx.RUnlock()
+			func () {
+				rt_mtx.Lock()
+				defer rt_mtx.Unlock()
+				err = constValue.TIMEOUT_ERR
+				roundtrip.Close()
+				roundtrip = &h2quic.RoundTripper{}
+			}()
+		}
+	}else { //not 0 content has no timeout
+		func() {
+			rt_mtx.RLock()
+			defer rt_mtx.RUnlock()
+			resp, err = roundtrip.RoundTrip(req)
+		}()
+	}
 	if err != nil {
 		log.Println(err)
-		if !isRedirectErr(err.Error()) { //非跳转
-			resp, err = handle_err_cli.Do(req)
+		resp, err = constValue.H2_cli.Do(req)
+		if err != nil {
+			log.Println(err)
+			if !constValue.IsRedirectErr(err.Error()) {
+				log.Println(err)
+				resw.WriteHeader(404)
+				return
+			}
+		}
+		/*if !constValue.IsRedirectErr(err.Error()) { //非跳转
+			resp, err = constValue.H2_cli.Do(req)
 			if err != nil {
 				log.Println(err)
-				if !isRedirectErr(err.Error()) {
+				if !constValue.IsRedirectErr(err.Error()) {
 					log.Println(err)
 					resw.WriteHeader(404)
 					return
@@ -128,7 +172,7 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 			}
 		}else {
 			resp.ContentLength = 0
-		}
+		}*/
 	}
 	defer resp.Body.Close()
 
@@ -175,10 +219,7 @@ func tranRepost(client net.Conn, address string, qPort string) {
 	h2server.ServeConn(conn, &http2.ServeConnOpts{Handler: &http2Handler{qPort: qPort}})
 }
 
-func isRedirectErr(err string) bool {
-	erridx := strings.LastIndexByte(err, ':') + 2
-	return erridx >= 2 && erridx < len(err) && err[erridx:] == constValue.REDIRECT_ERR.Error()
-}
+
 
 //单纯转发
 func simpleRepost(client net.Conn, address string, method string, req *http.Request) {

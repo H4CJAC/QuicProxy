@@ -2,7 +2,6 @@ package quicAddrs
 
 import (
 	"strings"
-	"net/http"
 	"time"
 	"log"
 	"GoQuicProxy/constValue"
@@ -53,12 +52,14 @@ func IsQuicSupported(address string) (bool, string) {
 func CheckAddr(address string, now_time int64) (bool, string) {
 	//存入缓存
 	addr_info := &addrInfo{expire_time: now_time + constValue.EXPIRE_TIME}
-	res, err := http.DefaultClient.Head(address)
+	res, err := constValue.H2_cli.Head(address)
 	if err != nil {
 		log.Println(err)
-		addr_info.quic_support = false
-		quic_support_map.add(address, addr_info)
-		return false, ""
+		if !constValue.IsRedirectErr(err.Error()) {
+			addr_info.quic_support = false
+			quic_support_map.add(address, addr_info)
+			return false, ""
+		}
 	}
 
 	defer res.Body.Close()
@@ -76,11 +77,22 @@ func CheckAddr(address string, now_time int64) (bool, string) {
 		return false, ""
 	}
 	e_off := strings.IndexByte(alt_svc[s_off:], '"') + s_off
-	if s_off > e_off || e_off > len(alt_svc) {
+	//s_off == e_off means nothing
+	if s_off >= e_off || e_off > len(alt_svc) {
 		addr_info.quic_support = false
 		quic_support_map.add(address, addr_info)
 		return false, ""
 	}
+
+	/*alt-svc = url:port, leave url alone*/
+	p_off := strings.IndexByte(alt_svc[s_off:e_off], ':')
+	if p_off < 0 || p_off >= e_off - s_off {
+		addr_info.quic_support = false
+		quic_support_map.add(address, addr_info)
+		return false, ""
+	}
+	s_off += p_off
+
 	addr_info.quic_support = true
 	addr_info.port = alt_svc[s_off:e_off]
 	quic_support_map.add(address, addr_info)
