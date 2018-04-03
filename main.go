@@ -30,6 +30,7 @@ var (
 
 //入口
 func main() {
+
 	log.SetFlags(log.LstdFlags|log.Lshortfile)
 	//加载根证书
 	err := utils.LoadRootCA()
@@ -45,6 +46,7 @@ func main() {
 	}
 	roundtrip = &h2quic.RoundTripper{}
 	defer roundtrip.Close()
+
 	/*quic_cli = &http.Client{Transport: roundtrip}
 	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return constValue.REDIRECT_ERR
@@ -125,22 +127,15 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 		comp_chan := make(chan bool)
 		go func() {
 			rt_mtx.RLock()
+			defer rt_mtx.RUnlock()
 			resp, err = roundtrip.RoundTrip(req)
 			defer close(comp_chan)
 			comp_chan <- true
 		}()
 		select {
 		case <- comp_chan:
-			rt_mtx.RUnlock()
 		case <- time.After(constValue.QUIC_DO_TIMEOUT):
-			rt_mtx.RUnlock()
-			func () {
-				rt_mtx.Lock()
-				defer rt_mtx.Unlock()
-				err = constValue.TIMEOUT_ERR
-				roundtrip.Close()
-				roundtrip = &h2quic.RoundTripper{}
-			}()
+			err = constValue.TIMEOUT_ERR
 		}
 	}else { //not 0 content has no timeout
 		func() {
@@ -150,7 +145,16 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 		}()
 	}
 	if err != nil {
-		log.Println(err)
+		log.Println(err, req.URL.String())
+		func () {
+			rt_mtx.Lock()
+			defer rt_mtx.Unlock()
+			err = roundtrip.Close() //it can be used again
+			if err != nil {
+				log.Println(err)
+			}
+			//roundtrip = &h2quic.RoundTripper{}
+		}()
 		resp, err = constValue.H2_cli.Do(req)
 		if err != nil {
 			log.Println(err)
