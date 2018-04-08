@@ -17,6 +17,7 @@ import (
 	"golang.org/x/net/http2"
 	"time"
 	"sync"
+	"bytes"
 )
 
 var (
@@ -149,11 +150,13 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 		func () {
 			rt_mtx.Lock()
 			defer rt_mtx.Unlock()
-			err = roundtrip.Close() //it can be used again
-			if err != nil {
-				log.Println(err)
-			}
-			//roundtrip = &h2quic.RoundTripper{}
+			go func() {
+				err = roundtrip.Close()
+				if err != nil {
+					log.Println(err)
+				}
+			}()
+			roundtrip = &h2quic.RoundTripper{}
 		}()
 		resp, err = constValue.H2_cli.Do(req)
 		if err != nil {
@@ -164,19 +167,6 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 				return
 			}
 		}
-		/*if !constValue.IsRedirectErr(err.Error()) { //非跳转
-			resp, err = constValue.H2_cli.Do(req)
-			if err != nil {
-				log.Println(err)
-				if !constValue.IsRedirectErr(err.Error()) {
-					log.Println(err)
-					resw.WriteHeader(404)
-					return
-				}
-			}
-		}else {
-			resp.ContentLength = 0
-		}*/
 	}
 	defer resp.Body.Close()
 
@@ -187,12 +177,43 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	}
 	resw.WriteHeader(resp.StatusCode)
 	if resp.ContentLength != 0 {
-		n, err := io.Copy(resw, resp.Body)
+		n, err := myIOCopy(resw, resp.Body)
+		//n, err := io.Copy(resw, resp.Body)
 		if err != nil {
 			log.Println(err, n, req.URL)
 			dealOverflow(resp.Body, overflow_bs[:])
 		}
 	}
+}
+
+func myIOCopy(dst io.Writer, src io.Reader) (written int64, err error) {
+	buff := &bytes.Buffer{}
+	for {
+		nr, er := io.CopyN(buff, src, 64 * 1024)
+		if nr > 0 {
+			nw, ew := dst.Write(buff.Bytes()[:nr])
+			buff.Reset()
+			if nw > 0 {
+				written += int64(nw)
+			}
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != int64(nw) {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+	buff = nil
+	return written, err
 }
 
 func dealOverflow(src io.Reader, buf []byte) {
