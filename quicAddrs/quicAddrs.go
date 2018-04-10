@@ -55,7 +55,8 @@ func CheckAddr(address string, now_time int64) (bool, string) {
 	res, err := constValue.H2_cli.Head(address)
 	if err != nil {
 		log.Println(err)
-		if !constValue.IsRedirectErr(err.Error()) {
+		//res != nil... 避免EOF错误导致quic识别错误，识别机制容错性有待改善
+		if !(constValue.IsRedirectErr(err.Error()) || (res != nil && res.Header != nil)) {
 			addr_info.quic_support = false
 			quic_support_map.add(address, addr_info)
 			return false, ""

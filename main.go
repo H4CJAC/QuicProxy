@@ -128,14 +128,15 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 		comp_chan := make(chan bool)
 		go func() {
 			rt_mtx.RLock()
-			defer rt_mtx.RUnlock()
 			resp, err = roundtrip.RoundTrip(req)
 			defer close(comp_chan)
 			comp_chan <- true
 		}()
 		select {
 		case <- comp_chan:
+			rt_mtx.RUnlock()
 		case <- time.After(constValue.QUIC_DO_TIMEOUT):
+			rt_mtx.RUnlock()
 			err = constValue.TIMEOUT_ERR
 		}
 	}else { //not 0 content has no timeout
