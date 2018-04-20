@@ -14,12 +14,14 @@ const (
 	CERT_NODEID = 0
 	EXPIRE_TIME = 24 * 3600 //秒
 	QUIC_DO_TIMEOUT = 30 * time.Second
+	BROKEN_STEP = 20 * time.Second
 )
 
 var (
 	REDIRECT_ERR = errors.New("REDI_ERR")
 	HTTP_CLOSE_ERR = errors.New("CLOSE_ERR")
 	TIMEOUT_ERR = errors.New("TIMEOUT_ERR")
+	BROKEN_ERR = errors.New("BROKEN_ERR")
 	TIME_ZERO = time.Time{}
 	H2_cli = &http.Client{Transport: &http2.Transport{AllowHTTP: true}}
 )

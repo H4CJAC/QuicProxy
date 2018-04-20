@@ -84,7 +84,7 @@ func handleClientRequest(client net.Conn) {
 		return
 	}
 
-	////解析出url，获得method、host和address
+	////解析出url，获得method和address
 	method := req.Method
 	address := req.Host
 	if strings.Index(address, ":") == -1 { //address不带端口， 默认80
@@ -107,6 +107,7 @@ func handleClientRequest(client net.Conn) {
 
 type http2Handler struct {
 	qPort string
+	address string
 }
 
 
@@ -121,44 +122,54 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 
 	var resp *http.Response
 	var err error
-	if req.ContentLength == 0 { //0 content request has a timeout
+	isBroken, hasBrokenCount := quicAddrs.IsBroken("https://" + h.address)
+	if !isBroken {
+		if req.ContentLength == 0 { //0 content request has a timeout
 
-		req.Body = nil //0 content request's body has to be nil
+			req.Body = nil //0 content request's body has to be nil
 
-		comp_chan := make(chan bool)
-		go func() {
-			rt_mtx.RLock()
-			resp, err = roundtrip.RoundTrip(req)
-			defer close(comp_chan)
-			comp_chan <- true
-		}()
-		select {
-		case <- comp_chan:
-			rt_mtx.RUnlock()
-		case <- time.After(constValue.QUIC_DO_TIMEOUT):
-			rt_mtx.RUnlock()
-			err = constValue.TIMEOUT_ERR
+			comp_chan := make(chan bool)
+			go func() {
+				rt_mtx.RLock()
+				resp, err = roundtrip.RoundTrip(req)
+				defer close(comp_chan)
+				comp_chan <- true
+			}()
+			select {
+			case <- comp_chan:
+				rt_mtx.RUnlock()
+			case <- time.After(constValue.QUIC_DO_TIMEOUT):
+				rt_mtx.RUnlock()
+				err = constValue.TIMEOUT_ERR
+			}
+		}else { //not 0 content has no timeout
+			func() {
+				rt_mtx.RLock()
+				defer rt_mtx.RUnlock()
+				resp, err = roundtrip.RoundTrip(req)
+			}()
 		}
-	}else { //not 0 content has no timeout
-		func() {
-			rt_mtx.RLock()
-			defer rt_mtx.RUnlock()
-			resp, err = roundtrip.RoundTrip(req)
-		}()
+	}else {
+		err = constValue.BROKEN_ERR
 	}
 	if err != nil {
 		log.Println(err, req.URL.String())
-		func () {
-			rt_mtx.Lock()
-			defer rt_mtx.Unlock()
-			go func() {
-				err = roundtrip.Close()
-				if err != nil {
-					log.Println(err)
-				}
+		if strings.Contains(err.Error(), "HandshakeTimeout") {
+			quicAddrs.IncBroken("https://" + h.address)
+		}
+		if err != constValue.BROKEN_ERR {
+			func () {
+				rt_mtx.Lock()
+				defer rt_mtx.Unlock()
+				go func() {
+					err = roundtrip.Close()
+					if err != nil {
+						log.Println(err)
+					}
+				}()
+				roundtrip = &h2quic.RoundTripper{}
 			}()
-			roundtrip = &h2quic.RoundTripper{}
-		}()
+		}
 		resp, err = constValue.H2_cli.Do(req)
 		if err != nil {
 			log.Println(err)
@@ -168,6 +179,8 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 				return
 			}
 		}
+	}else if hasBrokenCount {
+		quicAddrs.ResetBroken("https://" + h.address)
 	}
 	defer resp.Body.Close()
 
@@ -242,9 +255,8 @@ func tranRepost(client net.Conn, address string, qPort string) {
 		log.Println(err, address)
 		return
 	}
-	h2server.ServeConn(conn, &http2.ServeConnOpts{Handler: &http2Handler{qPort: qPort}})
+	h2server.ServeConn(conn, &http2.ServeConnOpts{Handler: &http2Handler{qPort: qPort, address: address}})
 }
-
 
 
 //单纯转发

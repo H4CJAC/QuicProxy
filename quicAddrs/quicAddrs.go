@@ -6,6 +6,7 @@ import (
 	"log"
 	"GoQuicProxy/constValue"
 	"sync"
+	"math"
 )
 
 var (
@@ -19,8 +20,11 @@ type quicSupportMap struct {
 
 type addrInfo struct {
 	quic_support bool
-	expire_time int64
+	expire_time int64 //ns
+	broken_time int64 //ns
+	broken_count int16 //offset per 5min
 	port string
+	mtx sync.RWMutex
 }
 
 func (m *quicSupportMap) get(addr string) (*addrInfo, bool) {
@@ -34,6 +38,52 @@ func (m *quicSupportMap) add(addr string, info *addrInfo) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	m.mp[addr] = info
+}
+
+func ResetBroken(address string) {
+	a, ok := quic_support_map.get(address)
+	if !ok {
+		return
+	}
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+	a.broken_count = 0
+	log.Println("reset broken:", address)
+}
+
+func IncBroken(address string) {
+	a, ok := quic_support_map.get(address)
+	if !ok {
+		return
+	}
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+	if a.broken_count < 1 {
+		a.broken_count = 1
+	}else {
+		if a.broken_count < (1 << 14) {
+			a.broken_count <<= 1
+		}else {
+			a.broken_count = math.MaxInt16
+		}
+	}
+	a.broken_time = time.Now().Unix() + int64(a.broken_count) * int64(constValue.BROKEN_STEP.Seconds())
+	log.Println("broken:", a.broken_time, a.broken_count)
+}
+
+func IsBroken(address string) (bool, bool) { //isbroken, countlargerthanzero
+	a, ok := quic_support_map.get(address)
+	if !ok {
+		log.Println("isbroken:", address)
+		return true, false
+	}
+	a.mtx.RLock()
+	defer a.mtx.RUnlock()
+	if a.broken_time < time.Now().Unix() {
+		return false, a.broken_count > 0
+	}
+	log.Println("isbroken:", address)
+	return true, a.broken_count > 0
 }
 
 //是否支持quic
@@ -51,7 +101,7 @@ func IsQuicSupported(address string) (bool, string) {
 
 func CheckAddr(address string, now_time int64) (bool, string) {
 	//存入缓存
-	addr_info := &addrInfo{expire_time: now_time + constValue.EXPIRE_TIME}
+	addr_info := &addrInfo{expire_time: now_time + constValue.EXPIRE_TIME, mtx: sync.RWMutex{}}
 	res, err := constValue.H2_cli.Head(address)
 	if err != nil {
 		log.Println(err)
