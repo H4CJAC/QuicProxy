@@ -20,9 +20,9 @@ type quicSupportMap struct {
 
 type addrInfo struct {
 	quic_support bool
-	expire_time int64 //ns
-	broken_time int64 //ns
-	broken_count int16 //offset per 5min
+	expire_time int64 //s
+	broken_time int64 //s
+	broken_count int16 //offset per BROKEN_STEP
 	port string
 	mtx sync.RWMutex
 }

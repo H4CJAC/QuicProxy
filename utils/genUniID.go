@@ -3,6 +3,7 @@ package utils
 import (
 	"sync"
 	"time"
+	"math"
 )
 
 const (
@@ -21,7 +22,7 @@ type Generator struct {
 
 //nodeID < 32
 func (g *Generator) GenID() int64 {
-	id := int64(0)
+	id := int64(math.MaxInt64)
 	g.mtx.Lock()
 	defer g.mtx.Unlock()
 	timestamp := (time.Now().UnixNano() - tw_epoch) / 1000000
@@ -42,6 +43,6 @@ func (g *Generator) GenID() int64 {
 		g.last_timestamp = timestamp
 		g.sequence = 0
 	}
-	id |= (timestamp << time_offset) | (g.NodeID << node_offset) | g.sequence
+	id &= (timestamp << time_offset) | (g.NodeID << node_offset) | g.sequence
 	return id
 }
