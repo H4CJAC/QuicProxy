@@ -21,15 +21,17 @@ import (
 )
 
 var (
-	//quic_cli *http.Client
 	roundtrip *h2quic.RoundTripper
 	rt_mtx = &sync.RWMutex{}
 	h2server = &http2.Server{}
 	overflow_bs = [32 * 1024]byte{}
 )
 
-
-//入口
+/*
+程序入口
+@param
+@return
+*/
 func main() {
 
 	log.SetFlags(log.LstdFlags|log.Lshortfile)
@@ -48,10 +50,6 @@ func main() {
 	roundtrip = &h2quic.RoundTripper{}
 	defer roundtrip.Close()
 
-	/*quic_cli = &http.Client{Transport: roundtrip}
-	quic_cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return constValue.REDIRECT_ERR
-	}*/
 	log.Println("......started......")
 
 	for {
@@ -65,7 +63,11 @@ func main() {
 	}
 }
 
-//处理client请求
+/*
+处理client请求
+@param client 连接句柄
+@return
+*/
 func handleClientRequest(client net.Conn) {
 	if client == nil {
 		return
@@ -84,7 +86,7 @@ func handleClientRequest(client net.Conn) {
 		return
 	}
 
-	////解析出url，获得method和address
+	//解析出url，获得method和address
 	method := req.Method
 	address := req.Host
 	if strings.Index(address, ":") == -1 { //address不带端口， 默认80
@@ -110,7 +112,12 @@ type http2Handler struct {
 	address string
 }
 
-
+/*
+HTTP/2+TLS服务器调用HTTP/2+QUIC客户端进行请求处理过程
+@param resw 响应输出
+@param req 请求
+@return
+ */
 func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	req.Host = req.Host + h.qPort
 	req.URL.Host = req.Host
@@ -124,9 +131,9 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	var err error
 	isBroken, hasBrokenCount := quicAddrs.IsBroken("https://" + h.address)
 	if !isBroken {
-		if req.ContentLength == 0 { //0 content request has a timeout
+		if req.ContentLength == 0 {
 
-			req.Body = nil //0 content request's body has to be nil
+			req.Body = nil
 
 			comp_chan := make(chan bool)
 			go func() {
@@ -142,7 +149,7 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 				rt_mtx.RUnlock()
 				err = constValue.TIMEOUT_ERR
 			}
-		}else { //not 0 content has no timeout
+		}else {
 			func() {
 				rt_mtx.RLock()
 				defer rt_mtx.RUnlock()
@@ -192,7 +199,6 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	resw.WriteHeader(resp.StatusCode)
 	if resp.ContentLength != 0 {
 		n, err := myIOCopy(resw, resp.Body)
-		//n, err := io.Copy(resw, resp.Body)
 		if err != nil {
 			log.Println(err, n, req.URL)
 			dealOverflow(resp.Body, overflow_bs[:])
@@ -200,6 +206,12 @@ func (h *http2Handler) ServeHTTP(resw http.ResponseWriter, req *http.Request) {
 	}
 }
 
+/*
+IO转发
+@param dst IO转发目标
+@param src IO转发源头
+@return (转发数据字节数, 错误)
+*/
 func myIOCopy(dst io.Writer, src io.Reader) (written int64, err error) {
 	buff := &bytes.Buffer{}
 	for {
@@ -230,6 +242,12 @@ func myIOCopy(dst io.Writer, src io.Reader) (written int64, err error) {
 	return written, err
 }
 
+/*
+处理多余的数据
+@param src IO读出流
+@param buf 缓冲字节数组
+@return
+*/
 func dealOverflow(src io.Reader, buf []byte) {
 	for {
 		_, er := src.Read(buf)
@@ -242,7 +260,13 @@ func dealOverflow(src io.Reader, buf []byte) {
 	}
 }
 
-//协议转换转发
+/*
+协议转换转发
+@param client 连接句柄
+@param address 目的网站地址
+@param qPort 目的网站端口号
+@return
+*/
 func tranRepost(client net.Conn, address string, qPort string) {
 	//建立tls连接
 	_, err := fmt.Fprint(client, "HTTP/1.1 200 Connection established\r\n\r\n")
@@ -258,8 +282,14 @@ func tranRepost(client net.Conn, address string, qPort string) {
 	h2server.ServeConn(conn, &http2.ServeConnOpts{Handler: &http2Handler{qPort: qPort, address: address}})
 }
 
-
-//单纯转发
+/*
+单纯转发
+@param client 连接句柄
+@param address 目的网站地址
+@param method 请求方式
+@param req 请求对象
+@return
+*/
 func simpleRepost(client net.Conn, address string, method string, req *http.Request) {
 	server, err := net.Dial("tcp", address)
 	if err != nil {
@@ -275,12 +305,12 @@ func simpleRepost(client net.Conn, address string, method string, req *http.Requ
 	//进行转发
 	ExitChan := make(chan bool,1)
 	defer close(ExitChan)
-	////client转至server
+	//client转至server
 	go func(){
 		io.Copy(server, client)
 		ExitChan <- true
 	}()
-	////server转至client
+	//server转至client
 	go func() {
 		io.Copy(client, server)
 		ExitChan <- true

@@ -20,7 +20,6 @@ import (
 const(
 	rootCa = "./certs/ca/ca.cer"
 	rootKey = "./certs/ca/cakey.pem"
-	cert_map_max_len = 100
 )
 
 type certMap struct {
@@ -35,6 +34,11 @@ var(
 	cert_map = certMap{mp: make(map[string]*tls.Certificate), mtx: sync.RWMutex{}}
 )
 
+/*
+获取证书信息
+@param addr 目的网站地址
+@return (证书对象, 是否存在证书对象)
+*/
 func (m *certMap) get(addr string) (*tls.Certificate, bool) {
 	m.mtx.RLock()
 	defer m.mtx.RUnlock()
@@ -42,12 +46,23 @@ func (m *certMap) get(addr string) (*tls.Certificate, bool) {
 	return cer, ok
 }
 
+/*
+添加证书信息
+@param addr 目的网站地址
+@param certificate 证书对象
+@return
+*/
 func (m *certMap) add(addr string, certificate *tls.Certificate) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	m.mp[addr] = certificate
 }
 
+/*
+加载根证书
+@param
+@return
+*/
 func LoadRootCA() error {
 	//读取根证书文件和私钥文件
 	caFile, err := ioutil.ReadFile(rootCa)
@@ -72,6 +87,11 @@ func LoadRootCA() error {
 	return nil
 }
 
+/*
+生成证书
+@param addr 目的网站地址
+@return (证书对象, 错误)
+*/
 func GenCert(addr string) (*tls.Certificate, error) {
 	log.Println(len(cert_map.mp))
 	cert, ok := cert_map.get(addr)
@@ -96,6 +116,13 @@ func GenCert(addr string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
+/*
+生成证书
+@param addr 目的网站地址
+@param cerFile 生成证书保存路径
+@param keyFile 生成证书密钥保存路径
+@return 错误
+ */
 func createCer(addr string, cerFile string, keyFile string) error {
 	//证书模板
 	cerModel := &x509.Certificate{

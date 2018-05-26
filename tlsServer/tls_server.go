@@ -6,7 +6,12 @@ import (
 	"GoQuicProxy/utils"
 )
 
-//建立连接
+/*
+建立TLS连接
+@param client 连接句柄
+@param addr 目的网站地址
+@return (TLS连接句柄, 错误)
+*/
 func Dial(client net.Conn, addr string) (net.Conn, error) {
 	cer, err := utils.GenCert(addr)
 	if err != nil {

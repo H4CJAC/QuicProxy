@@ -20,7 +20,11 @@ type Generator struct {
 	mtx sync.Mutex
 }
 
-//nodeID < 32
+/*
+生成唯一序列号
+@param
+@return 唯一序列号
+*/
 func (g *Generator) GenID() int64 {
 	id := int64(math.MaxInt64)
 	g.mtx.Lock()
